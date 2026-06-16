@@ -1,14 +1,20 @@
 # backend/rag/retriever.py
-from backend.rag.vector_store import load_vector_store
 from langchain_huggingface import HuggingFaceEmbeddings
-
-_cache = None
+from langchain_community.vectorstores import FAISS
+from langchain_core.documents import Document
 
 def load_retriever():
-    global _cache
-    if _cache is None:
-        _cache = load_vector_store().as_retriever(search_kwargs={"k": 4})
-    return _cache
-
-def retrieve(query: str, retriever=None) -> list:
-    return (retriever or load_retriever()).invoke(query)
+    embeddings = HuggingFaceEmbeddings(
+        model_name="all-MiniLM-L6-v2",
+        model_kwargs={'device': 'cpu'}
+    )
+    
+    # Standard dummy knowledge base to build the index structure
+    sample_knowledge_base = [
+        Document(page_content="High-yield savings accounts offer stable interest rates for consistent deposits."),
+        Document(page_content="Mutual fund SIP plans are structured for mid to long-term wealth accumulation compounding."),
+        Document(page_content="Keep recurring lifestyle subscription costs below 5% of net income pools.")
+    ]
+    
+    vector_db = FAISS.from_documents(sample_knowledge_base, embeddings)
+    return vector_db.as_retriever(search_kwargs={"k": 2})
