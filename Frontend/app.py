@@ -12,7 +12,7 @@ st.set_page_config(
 )
 inject_styles()
 
-st.markdown('<div class="hero-title">Your Bank-Statement Knows More<br>About You Than You Think.</div>',
+st.markdown('<div class="hero-title">Your bank statement knows more<br>about you than you think.</div>',
             unsafe_allow_html=True)
 st.markdown('<div class="hero-sub">Upload your statement. Get a personal finance diagnosis in seconds.<br>'
             'Not generic tips — advice built from your actual transactions.</div>',
@@ -22,7 +22,7 @@ st.write("")
 col1, col2 = st.columns([1, 4])
 with col1:
     if st.button("Analyze My Statement →", type="primary", use_container_width=True):
-        st.switch_page("pages/1_Upload.py")
+        st.switch_page("pages/1_upload.py")
 
 st.divider()
 
