@@ -12,7 +12,7 @@ st.set_page_config(
 )
 inject_styles()
 
-st.markdown('<div class="hero-title">Your bank statement knows more<br>about you than you think.</div>',
+st.markdown('<div class="hero-title">Your Bank-Statement Knows More<br>About You Than You Think.</div>',
             unsafe_allow_html=True)
 st.markdown('<div class="hero-sub">Upload your statement. Get a personal finance diagnosis in seconds.<br>'
             'Not generic tips — advice built from your actual transactions.</div>',
