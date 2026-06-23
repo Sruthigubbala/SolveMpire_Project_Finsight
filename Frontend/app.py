@@ -1,9 +1,11 @@
-# frontend/app.py
+# Frontend/app.py
 import sys, os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import streamlit as st
-from Frontend.components.styles import inject_styles
+# ✅ Fixed import — was "from Frontend.components.styles" which crashes
+#    because when running from project root, Frontend/ is already the cwd context
+from components.styles import inject_styles
 
 st.set_page_config(
     page_title="FinSight — Personal Finance Coach",
