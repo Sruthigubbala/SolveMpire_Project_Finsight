@@ -2,17 +2,11 @@
 import pandas as pd
 
 def analyze_patterns(df: pd.DataFrame) -> dict:
-    # Exclude income rows from spend analysis. Previously this only checked
-    # the description text — now that parse_statement() can assign
-    # category="income" directly from the bank's own Category column,
-    # we exclude on BOTH signals so an income row can never leak into
-    # the spending breakdown (e.g. showing "Income: ₹45,000" as a category
-    # in the Spending by Category chart).
-    is_income = (
-        df["description"].str.lower().str.contains("credit|salary|stipend", na=False)
-        | (df["category"] == "income")
-    )
-    debits = df[~is_income]
+    # ✅ Use is_credit column (set correctly by parser) instead of
+    #    fragile keyword matching on description text.
+    #    UPI deposits like "UPI~CR~KUNDU TATA~..." don't contain the
+    #    word "credit", so the old approach counted them as spending.
+    debits = df[df["is_credit"] == False]
 
     if debits.empty:
         return {

@@ -15,7 +15,7 @@ from backend.agents.calculators       import calculate_savings_opportunities, ca
 from backend.rag.retriever            import load_retriever
 
 llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
+    model="gemini-3.1-flash-lite",
     google_api_key=os.getenv("GEMINI_API_KEY")
 )
 
