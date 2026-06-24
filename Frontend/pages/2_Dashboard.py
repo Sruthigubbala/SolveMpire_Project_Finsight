@@ -1,4 +1,4 @@
-# frontend/pages/2_Dashboard.py
+# Frontend/pages/2_Dashboard.py
 import sys, os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
@@ -27,7 +27,7 @@ st.caption("Analyzed by 5 AI agents using your bank statement")
 c1, c2, c3, c4, c5 = st.columns(5)
 metrics = [
     ("Total Spent",       f"₹{patterns['total_spent']:,.0f}",        ""),
-    ("Top Category",      patterns['top_category'].title(),           ""),
+    ("Top Category",      patterns['top_category'].replace("_", " ").title(), ""),
     ("Health Score",      f"{health['score']}/100",                   health['label']),
     ("Savings Potential", f"₹{sum(o['saving'] for o in savings):,.0f}", "this month"),
     ("Subscriptions",     f"₹{patterns['subscription_total']:,.0f}",  "/month"),
@@ -52,7 +52,20 @@ st.divider()
 
 # ── Savings Opportunities ─────────────────────────────────────
 st.subheader("Savings Opportunities")
-st.caption("Specific amounts you could have saved based on your actual transactions")
+st.caption("Specific amounts you could save based on your actual transactions")
+
+if savings:
+    for opp in savings:
+        with st.container():
+            col_a, col_b = st.columns([3, 1])
+            with col_a:
+                st.markdown(f"**{opp['title']}**  —  {opp['detail']}")
+                st.caption(f"💡 {opp['tip']}")
+            with col_b:
+                st.metric("Potential Saving", f"₹{opp['saving']:,.0f}")
+            st.divider()
+else:
+    st.success("✅ No major savings opportunities flagged — you're managing well!")
 
 st.divider()
 
@@ -70,8 +83,54 @@ st.divider()
 
 # ── Action Plan ───────────────────────────────────────────────
 st.subheader("Your Personalized Action Plan")
-st.markdown(f'<div class="advice-box">{result["advice"].replace(chr(10),"<br>")}</div>',
-            unsafe_allow_html=True)
+
+def extract_advice_text(advice) -> str:
+    """
+    Safely extract plain text from whatever the LLM returns.
+    Handles: raw string, LangChain AIMessage, list of content blocks,
+    or a dict like {'type': 'text', 'text': '...'}.
+    """
+    # Already a plain string
+    if isinstance(advice, str):
+        return advice
+
+    # LangChain AIMessage or similar object with .content
+    if hasattr(advice, "content"):
+        content = advice.content
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return "\n\n".join(
+                part.get("text", "") if isinstance(part, dict)
+                else (part.text if hasattr(part, "text") else str(part))
+                for part in content
+            )
+
+    # Raw list of content blocks
+    if isinstance(advice, list):
+        return "\n\n".join(
+            part.get("text", "") if isinstance(part, dict)
+            else (part.text if hasattr(part, "text") else str(part))
+            for part in advice
+        )
+
+    # Dict block e.g. {'type': 'text', 'text': '...'}
+    if isinstance(advice, dict):
+        return advice.get("text", str(advice))
+
+    return str(advice)
+
+
+advice_text = extract_advice_text(result["advice"])
+
+# Render each section as a proper Streamlit markdown block
+# Split on double newlines so bullets get their own lines
+for block in advice_text.split("\n\n"):
+    block = block.strip()
+    if not block:
+        continue
+    st.markdown(block)
+    st.write("")   # adds a visible gap between blocks
 
 st.divider()
 
