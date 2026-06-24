@@ -1,16 +1,20 @@
-# backend/agents/nl_query_agent.py
-import os, pandas as pd
+# backend/agents/nlp_query_agent.py
+import os
+import pandas as pd
 from dotenv import load_dotenv
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage
-from langchain_huggingface import HuggingFaceEmbeddings
+
 load_dotenv()
-llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
-    google_api_key=os.getenv("GEMINI_API_KEY")
-)
 
 def answer_question(question: str, df: pd.DataFrame) -> str:
+    # ✅ LLM created inside function — no crash at import time
+    # ✅ Removed unused HuggingFaceEmbeddings import
+    llm = ChatGoogleGenerativeAI(
+        model="gemini-3.1-flash-lite",
+        google_api_key=os.getenv("GEMINI_API_KEY")
+    )
+
     by_cat   = df.groupby("category")["amount"].sum().sort_values(ascending=False)
     by_merch = df.groupby("description")["amount"].sum().sort_values(ascending=False).head(15)
     by_day   = df.groupby("weekday")["amount"].sum()
@@ -43,4 +47,4 @@ Data:
 
 Question: {question}
 """
-    return llm.invoke(prompt).content
+    return llm.invoke([HumanMessage(content=prompt)]).content

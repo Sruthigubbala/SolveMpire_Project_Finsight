@@ -1,5 +1,7 @@
 venv/
-
 __pycache__/
 *.pyc
 .env
+backend/data/test_real_1.pdf
+backend/data/test_perfect.pdf
+backend/rag/faiss_index/
