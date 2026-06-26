@@ -1,18 +1,9 @@
-import sys
-import os
-
-# Adds the project root directory to the python path
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
-# Your existing imports below this line
 import os
 from dotenv import load_dotenv
 
 # 1. Load the environment first before ANY LangChain modules try to read it
 load_dotenv()
-print("API KEY:", os.getenv("GEMINI_API_KEY"))
+
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage  # Fixed legacy import!
 
@@ -24,7 +15,7 @@ from backend.agents.calculators       import calculate_savings_opportunities, ca
 from backend.rag.retriever            import load_retriever
 
 llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
+    model="gemini-3.1-flash-lite",
     google_api_key=os.getenv("GEMINI_API_KEY")
 )
 
@@ -42,6 +33,7 @@ def run_finsight_pipeline(file_path: str) -> dict:
     # 3. Inject mock/fallback text for prompts if retriever is down due to network
     advice = llm.invoke([HumanMessage(content=generate_advice_prompt(patterns, retriever))]).content
     schemes = llm.invoke([HumanMessage(content=match_schemes_prompt(patterns, retriever))]).content
+    
     
     savings_opps = calculate_savings_opportunities(df, patterns)
     health_score = calculate_health_score(df, patterns)

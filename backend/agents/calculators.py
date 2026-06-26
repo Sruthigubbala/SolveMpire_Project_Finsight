@@ -7,7 +7,7 @@ def calculate_savings_opportunities(df: pd.DataFrame, patterns: dict) -> list:
     if patterns["total_spent"] == 0:
         return opps
 
-    food    = df[df["category"] == "food"]
+    food    = df[(df["category"] == "food") & (df["is_credit"] == False)]
     impulse = food[food["amount"] > 300]
     if not impulse.empty:
         potential = impulse["amount"].sum() - (len(impulse) * 300)
@@ -28,14 +28,9 @@ def calculate_savings_opportunities(df: pd.DataFrame, patterns: dict) -> list:
             "tip":    "Audit which services you used this month"
         })
 
-    # Use the FULL statement date range to count weekend/weekday days,
-    # not just dates that happen to have a transaction. Counting only
-    # dates present in the data understates n_weekend_days whenever a
-    # weekend day has zero spending (e.g. no transactions on a Sunday),
-    # which skews the weekday/weekend average comparison.
     dates = df["date"].dropna()
     if not dates.empty:
-        full_range = pd.date_range(dates.min(), dates.max(), freq="D")
+        full_range     = pd.date_range(dates.min(), dates.max(), freq="D")
         n_weekend_days = (full_range.weekday >= 5).sum()
         n_weekday_days = (full_range.weekday < 5).sum()
     else:
@@ -50,8 +45,7 @@ def calculate_savings_opportunities(df: pd.DataFrame, patterns: dict) -> list:
             if excess > 0:
                 opps.append({
                     "title":  "Control weekend spending",
-                    "detail": f"Weekend spend ₹{patterns['weekend_spend']:,.0f} — "
-                              f"higher than weekday average",
+                    "detail": f"Weekend spend ₹{patterns['weekend_spend']:,.0f} — higher than weekday average",
                     "saving": round(excess * 0.5, 2),
                     "tip":    "Plan weekend activities with a fixed budget"
                 })
@@ -67,16 +61,14 @@ def calculate_health_score(df: pd.DataFrame, patterns: dict) -> dict:
                            "score": 0, "max": 100, "good": None}]
         }
 
-    opps         = calculate_savings_opportunities(df, patterns)
-    income_rows  = df[df["description"].str.lower().str.contains(
-                      "credit|salary|stipend", na=False)]
+    opps = calculate_savings_opportunities(df, patterns)
+
+    # ✅ Use is_credit column — catches all UPI deposits, not just
+    #    rows whose description contains "credit/salary/stipend"
+    income_rows  = df[df["is_credit"] == True]
     total_income = income_rows["amount"].sum()
 
     # ── Component 1: Savings rate (0–30 pts) ──────────────────────────
-    # FIX: max(0, ...) floor. A negative savings rate (spent more than
-    # earned that period) must clamp at 0 — previously it went negative
-    # and silently dragged the entire score down below what the other
-    # 4 components alone would have produced.
     if total_income > 0:
         rate = (total_income - patterns["total_spent"]) / total_income
         s1   = max(0, min(30, int(rate * 100)))
