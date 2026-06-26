@@ -34,6 +34,7 @@ def run_finsight_pipeline(file_path: str) -> dict:
     advice = llm.invoke([HumanMessage(content=generate_advice_prompt(patterns, retriever))]).content
     schemes = llm.invoke([HumanMessage(content=match_schemes_prompt(patterns, retriever))]).content
     
+    
     savings_opps = calculate_savings_opportunities(df, patterns)
     health_score = calculate_health_score(df, patterns)
 

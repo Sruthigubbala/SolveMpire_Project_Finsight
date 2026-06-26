@@ -8,6 +8,14 @@ Supported banks
 PDF : SBI, Union Bank of India, IPPB, Canara Bank, generic fallback
 CSV : Canara Bank ePassbook, generic (SBI / HDFC / Axis / ICICI exports)
 
+How detection works
+-------------------
+1. Score each bank parser using text headers + table headers + column patterns
+2. Try parsers in confidence order (highest score first)
+3. If the top parser fails → automatically try the next one (cascading fallback)
+4. If ALL scored parsers fail → try every parser in sequence (try-all mode)
+5. Generic PDF parser is always the last resort
+
 Public API
 ----------
 parse_statement(path) → pd.DataFrame
@@ -18,6 +26,7 @@ from __future__ import annotations
 
 import os
 import re
+import traceback
 from datetime import datetime
 
 import pandas as pd
@@ -55,7 +64,7 @@ CATEGORIES: dict[str, list[str]] = {
         "broadband", "fiber", "hathway", "tataplay fiber",
     ],
     "insurance": [
-        "pmsby", "pmjjby", "sbiya", "sbijb", "sbisb",          # SBI insurance codes
+        "pmsby", "pmjjby", "sbiya", "sbijb", "sbisb",
         "lic ", "star health", "bajaj allianz",
         "new india assurance", "hdfc ergo", "icici lombard",
         "insurance", "insure", "policy bazaar", "pairenewal",
@@ -124,7 +133,7 @@ CATEGORIES: dict[str, list[str]] = {
         "minimum balance", "cheque book", "dd charge", "neft charge",
         "imps charge", "processing fee", "late payment", "penalty",
         "bank charge", "ecs return", "nach return", "bounce charge",
-        "debit atmcard amc",                                    # SBI AMC
+        "debit atmcard amc", "annual maintenance charges", "sms charges",
     ],
     "atm_withdrawal": [
         "atw/", "atm/", "cash withdrawal", "cash at ", "atm cash",
@@ -134,10 +143,13 @@ CATEGORIES: dict[str, list[str]] = {
         "csh dep", "cash dep", "cdm",
     ],
     "interest_income": [
-        "interest credit", "int cr", "interest cr",
+        "interest credit", "int cr", "interest cr", "int.pd",
     ],
     "salary": [
         "salary", "cemtex dep",
+    ],
+    "lpg_subsidy": [
+        "lpg subsidy", "iocl lpg", "apbcr-dbl",
     ],
 }
 
@@ -157,7 +169,7 @@ def _groq_categorize(description: str, is_credit: bool = False) -> str:
     if key in _groq_cache:
         return _groq_cache[key]
     try:
-        import requests  # noqa: PLC0415
+        import requests
         api_key = os.getenv("GROQ_API_KEY")
         if not api_key:
             return "other"
@@ -177,6 +189,7 @@ def _groq_categorize(description: str, is_credit: bool = False) -> str:
             f"- INTEREST CREDIT → interest_income\n"
             f"- CEMTEX DEP, SALARY → salary\n"
             f"- CSH DEP, CDM deposit → cash_deposit\n"
+            f"- APBCR-DBL, LPG SUBSIDY → lpg_subsidy\n"
             f"- If CREDIT and no match → received\n"
             f"- If DEBIT and truly unrecognizable → personal_transfer\n\n"
             f"Reply with ONLY the category name, nothing else."
@@ -188,22 +201,28 @@ def _groq_categorize(description: str, is_credit: bool = False) -> str:
                 "Content-Type": "application/json",
             },
             json={
-                "model": "llama3-8b-8192",
+                "model": "llama-3.1-8b-instant",
                 "messages": [{"role": "user", "content": prompt}],
                 "max_tokens": 10,
                 "temperature": 0,
             },
             timeout=5,
         )
-        result = (
-            resp.json()["choices"][0]["message"]["content"].strip().lower()
-        )
+        resp_json = resp.json()
+        if "error" in resp_json:
+            err_msg = resp_json["error"].get("message", str(resp_json["error"]))
+            print(f"⚠️  Groq API error for '{description[:40]}': {err_msg}")
+            return "other"
+        if "choices" not in resp_json or not resp_json["choices"]:
+            print(f"⚠️  Groq unexpected response for '{description[:40]}': {resp_json}")
+            return "other"
+        result = resp_json["choices"][0]["message"]["content"].strip().lower()
         matched = next(
             (c for c in _GROQ_CATEGORIES if c == result), "other"
         )
         _groq_cache[key] = matched
         return matched
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         print(f"⚠️  Groq failed for '{description[:40]}': {exc}")
         return "other"
 
@@ -224,47 +243,39 @@ def categorize(desc: str, is_credit: bool) -> str:
     """Classify a transaction description into a spending category."""
     d = desc.lower()
 
-    # ── Priority rules (always checked first) ──────────────────────────────
+    # ── Priority rules ──────────────────────────────────────────────────────
 
-    # Interest income
-    if any(k in d for k in CATEGORIES["interest_income"]):
+    if any(k in d for k in CATEGORIES["lpg_subsidy"]):
+        return "lpg_subsidy"
+
+    if any(k in d for k in ["interest credit", "int cr", "interest cr"]):
         return "interest_income"
 
-    # Salary / employer credit
+    if "int.pd" in d or any(k in d for k in CATEGORIES["bank_fees"]):
+        return "bank_fees"
+
     if any(k in d for k in CATEGORIES["salary"]):
         return "salary"
 
-    # Cash deposits (CDM / CSH DEP)
     if any(k in d for k in CATEGORIES["cash_deposit"]):
         return "cash_deposit"
 
-    # Bank fees (ATM AMC, SMS charges, etc.)
-    if any(k in d for k in CATEGORIES["bank_fees"]):
-        return "bank_fees"
-
-    # ATM cash withdrawals
     if any(k in d for k in CATEGORIES["atm_withdrawal"]):
         return "atm_withdrawal"
-    # Long digit string = ATM ref pattern
     if re.match(r"^\d{10,}/\d+", desc.strip()):
         return "atm_withdrawal"
 
-    # SBI insurance premium codes (SBIYA / SBIJB / SBISB)
     if re.search(r"\bsbi[yjs]b?\d+", d):
         return "insurance"
 
-    # Credit card payments
     if any(k in d for k in CATEGORIES["credit_card_payment"]):
         return "credit_card_payment"
 
-    # Government / CBDC
     if any(k in d for k in CATEGORIES["government"]):
         return "government"
 
     # ── UPI direction routing ───────────────────────────────────────────────
 
-    # SBI UPI: UPI/DR = debit, UPI/CR = credit
-    # Also handles "DEP TFR" / "WDL TFR" prefix which SBI uses
     if "upi/cr" in d or "dep tfr" in d:
         hit = _keyword_scan(d)
         return hit if hit else "received"
@@ -276,7 +287,6 @@ def categorize(desc: str, is_credit: bool) -> str:
         groq = _groq_categorize(desc, is_credit=False)
         return groq if groq != "other" else "personal_transfer"
 
-    # Union Bank UPI
     if "upiab/" in d:
         hit = _keyword_scan(d)
         return hit if hit else "received"
@@ -288,10 +298,12 @@ def categorize(desc: str, is_credit: bool) -> str:
         groq = _groq_categorize(desc, is_credit=False)
         return groq if groq != "other" else "personal_transfer"
 
-    # IPPB UPI
     if "~cr~" in d or "~ft~" in d:
         hit = _keyword_scan(d)
         return hit if hit else "received"
+
+    if "~rvl~" in d:
+        return "received"
 
     if "~dr~" in d:
         hit = _keyword_scan(d)
@@ -300,16 +312,13 @@ def categorize(desc: str, is_credit: bool) -> str:
         groq = _groq_categorize(desc, is_credit=False)
         return groq if groq != "other" else "personal_transfer"
 
-    # IMPS credit
     if "impsab/" in d or "imps" in d:
         return "transfer"
 
-    # ── Full keyword scan for non-UPI transactions ──────────────────────────
     hit = _keyword_scan(d, skip=())
     if hit:
         return hit
 
-    # ── Groq AI fallback ────────────────────────────────────────────────────
     groq = _groq_categorize(desc, is_credit=is_credit)
     if groq == "other" and not is_credit:
         return "personal_transfer"
@@ -354,27 +363,112 @@ def _clean_amount(val: str) -> str:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# SBI PDF parser  (NEW)
+# PDF text + table extractor (with pdfplumber; fallback-safe)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _extract_pdf_signals(path: str) -> tuple[str, list | None]:
+    """
+    Extract the first page's text (uppercase) and first table.
+    Returns ("", None) if extraction fails entirely.
+    """
+    try:
+        with pdfplumber.open(path) as pdf:
+            text        = pdf.pages[0].extract_text() or ""
+            first_table = pdf.pages[0].extract_table()
+        return text.upper(), first_table
+    except Exception as exc:
+        print(f"⚠️  Could not read PDF signals: {exc}")
+        return "", None
+
+
+def _table_header_str(table: list | None) -> str:
+    """Return the first row of a table joined as an uppercase string."""
+    if not table:
+        return ""
+    return " ".join(str(c or "") for c in (table[0] or [])).upper()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Bank confidence scorer
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _score_banks(header: str, tbl_header: str) -> dict[str, int]:
+    scores: dict[str, int] = {
+        "sbi": 0,
+        "ippb": 0,
+        "union": 0,
+        "canara": 0,
+        "generic": 1,
+    }
+
+    if "STATE BANK OF INDIA" in header:
+        scores["sbi"] += 10
+    if "SBIN0" in header or re.search(r"\bSBIN\d", header):
+        scores["sbi"] += 8
+    if "SBIYA" in header or "SBIJB" in header or "SBISB" in header:
+        scores["sbi"] += 6
+    if "VALUE DATE" in tbl_header and "DEBIT" in tbl_header:
+        scores["sbi"] += 5
+    if "BRANCH NAME" in header or "ACCOUNT NUMBER" in header:
+        scores["sbi"] += 2
+
+    if "INDIA POST PAYMENTS BANK" in header:
+        scores["ippb"] += 10
+    if "INDIA POST" in header:
+        scores["ippb"] += 8
+    if re.search(r"\bIPPB\b", header) or re.search(r"\bIPOS\b", header):
+        scores["ippb"] += 8
+    if "WITHDRWAL" in tbl_header:
+        scores["ippb"] += 10
+    if "TRAN ID" in tbl_header and "TRANSACTION PARTICULARS" in tbl_header:
+        scores["ippb"] += 8
+    if "~CR~" in header or "~DR~" in header or "~FT~" in header:
+        scores["ippb"] += 6
+    if "IPOS" in header:
+        scores["ippb"] += 6
+
+    if "UNION BANK OF INDIA" in header:
+        scores["union"] += 10
+    if re.search(r"\bUBIN\d{7}\b", header):
+        scores["union"] += 8
+    if "PARTICULARS" in tbl_header and "WITHDRAWAL" in tbl_header:
+        scores["union"] += 6
+    if "UBIN" in header and scores["union"] < 5:
+        scores["union"] += 2
+
+    if "CANARA" in header:
+        scores["canara"] += 10
+    if re.search(r"\bCNRB\d", header):
+        scores["canara"] += 8
+    if "CANARABANK" in header or "CANARA BANK" in header:
+        scores["canara"] += 5
+    if "UPI/CR" in header or "UPI/DR" in header:
+        scores["canara"] += 3
+
+    return scores
+
+
+def _ranked_parsers(scores: dict[str, int]) -> list[str]:
+    """Return bank names sorted by score descending; generic always last."""
+    ranked = sorted(
+        [(k, v) for k, v in scores.items() if k != "generic"],
+        key=lambda x: x[1],
+        reverse=True,
+    )
+    names = [k for k, v in ranked if v > 0]
+    names.append("generic")
+    return names
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SBI PDF parser
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _extract_sbi_metadata(pdf_path: str) -> dict[str, str]:
-    """
-    Extract account-level metadata from SBI statement page 1.
-
-    Returns a dict with keys: account_number, ifsc, branch, holder_name,
-    account_type, opening_balance, closing_balance, statement_from,
-    statement_to.  Any field that cannot be found is left as an empty string.
-    """
     meta: dict[str, str] = {
-        "account_number": "",
-        "ifsc": "",
-        "branch": "",
-        "holder_name": "",
-        "account_type": "",
-        "opening_balance": "",
-        "closing_balance": "",
-        "statement_from": "",
-        "statement_to": "",
+        "account_number": "", "ifsc": "", "branch": "", "holder_name": "",
+        "account_type": "", "opening_balance": "", "closing_balance": "",
+        "statement_from": "", "statement_to": "",
     }
     with pdfplumber.open(pdf_path) as pdf:
         text = pdf.pages[0].extract_text() or ""
@@ -396,25 +490,18 @@ def _extract_sbi_metadata(pdf_path: str) -> dict[str, str]:
         if "Product" in lc and "Savings" in lc:
             meta["account_type"] = "Savings Account"
         if "Welcome:" in lc or "Mr." in lc or "Mrs." in lc or "Ms." in lc:
-            nm = re.search(
-                r"(?:Welcome:|Mr\.|Mrs\.|Ms\.)\s*([A-Za-z\s]+)", lc
-            )
+            nm = re.search(r"(?:Welcome:|Mr\.|Mrs\.|Ms\.)\s*([A-Za-z\s]+)", lc)
             if nm and not meta["holder_name"]:
                 meta["holder_name"] = nm.group(1).strip()
 
-    # Statement date range: "Statement From  : 01-04-2025 to 31-03-2026"
     m = re.search(
-        r"Statement From\s*:\s*(\d{2}-\d{2}-\d{4})\s+to\s+(\d{2}-\d{2}-\d{4})",
-        text,
+        r"Statement From\s*:\s*(\d{2}-\d{2}-\d{4})\s+to\s+(\d{2}-\d{2}-\d{4})", text,
     )
     if m:
         meta["statement_from"] = m.group(1)
         meta["statement_to"] = m.group(2)
 
-    # Opening / closing from statement summary table on last page
-    m = re.search(
-        r"Brought Forward.*?([\d,]+\.?\d*)\s*CR", text, re.DOTALL
-    )
+    m = re.search(r"Brought Forward.*?([\d,]+\.?\d*)\s*CR", text, re.DOTALL)
     if m:
         meta["opening_balance"] = m.group(1).replace(",", "")
 
@@ -422,18 +509,7 @@ def _extract_sbi_metadata(pdf_path: str) -> dict[str, str]:
 
 
 def parse_sbi_pdf(path: str) -> pd.DataFrame:
-    """
-    Parse an SBI (State Bank of India) PDF statement.
-
-    SBI statement columns:
-        Value Date | Post Date | Details | Ref No/Cheque No | ₹ Debit | ₹ Credit | Balance
-
-    DEP TFR  = deposit / credit entry
-    WDL TFR  = withdrawal / debit entry
-    ATM WDL  = ATM cash withdrawal
-    """
     rows: list[dict] = []
-
     with pdfplumber.open(path) as pdf:
         for page in pdf.pages:
             tables = page.extract_tables()
@@ -441,47 +517,35 @@ def parse_sbi_pdf(path: str) -> pd.DataFrame:
                 for row in table:
                     if not row or len(row) < 7:
                         continue
-                    # Column layout: [value_date, post_date, details, ref, debit, credit, balance]
                     date_str = str(row[0] or "").strip()
                     details  = str(row[2] or "").replace("\n", " ").strip()
                     debit    = str(row[4] or "").strip()
                     credit   = str(row[5] or "").strip()
 
-                    # Only process rows that look like real transaction dates
                     if not re.match(r"\d{2}/\d{2}/\d{4}", date_str):
                         continue
-                    # Skip header-like rows
                     if details.lower() in ("details", "particulars", "narration"):
                         continue
 
                     debit_val  = _clean_amount(debit)
                     credit_val = _clean_amount(credit)
 
-                    # Determine direction
-                    d = details.upper()
-                    # SBI explicitly labels: DEP TFR = credit, WDL TFR = debit
-                    # ATM WDL = debit; INTEREST CREDIT = credit; CSH DEP = credit
                     if credit_val and float(credit_val) > 0:
                         rows.append({
-                            "date": date_str,
-                            "description": details,
-                            "amount": credit_val,
-                            "is_credit": True,
+                            "date": date_str, "description": details,
+                            "amount": credit_val, "is_credit": True,
                         })
                     elif debit_val and float(debit_val) > 0:
                         rows.append({
-                            "date": date_str,
-                            "description": details,
-                            "amount": debit_val,
-                            "is_credit": False,
+                            "date": date_str, "description": details,
+                            "amount": debit_val, "is_credit": False,
                         })
 
     if not rows:
         raise ValueError("No transactions found in SBI PDF.")
 
     df = pd.DataFrame(rows)
-    # Reformat date from DD/MM/YYYY → standard string for _parse_dates
-    df["date"] = df["date"].str.replace("/", "-")   # → DD-MM-YYYY
+    df["date"] = df["date"].str.replace("/", "-")
     return df
 
 
@@ -490,10 +554,6 @@ def parse_sbi_pdf(path: str) -> pd.DataFrame:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def parse_union_bank_pdf(path: str) -> pd.DataFrame:
-    """
-    Parse Union Bank of India PDF statement.
-    Columns: SI | Date | Particulars | Chq Num | Withdrawal | Deposit | Balance
-    """
     rows: list[dict] = []
     with pdfplumber.open(path) as pdf:
         for page in pdf.pages:
@@ -551,15 +611,12 @@ def parse_union_bank_pdf(path: str) -> pd.DataFrame:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# IPPB PDF parser
+# IPPB PDF parser — enhanced with multi-layout support
 # ──────────────────────────────────────────────────────────────────────────────
 
 def parse_ippb_pdf(path: str) -> pd.DataFrame:
-    """
-    Parse India Post Payments Bank (IPPB) PDF statement.
-    Columns: DATE | TRAN ID | TRANSACTION PARTICULARS | WITHDRWAL | DEPOSIT | BALANCE | Cr/Dr
-    """
     rows: list[dict] = []
+
     with pdfplumber.open(path) as pdf:
         for page in pdf.pages:
             table = page.extract_table()
@@ -583,6 +640,7 @@ def parse_ippb_pdf(path: str) -> pd.DataFrame:
             for row in table[header_idx + 1:]:
                 if row is None or len(row) < 5:
                     continue
+
                 date_str   = str(row[0] or "").strip()
                 desc       = str(row[2] or "").replace("\n", " ").strip()
                 withdrawal = str(row[3] or "").strip()
@@ -595,8 +653,16 @@ def parse_ippb_pdf(path: str) -> pd.DataFrame:
 
                 w_val = _clean_amount(withdrawal)
                 d_val = _clean_amount(deposit)
+                is_reversal = "~rvl~" in desc.lower()
 
-                if w_val and float(w_val) > 0:
+                if is_reversal:
+                    amount = w_val or d_val
+                    if amount and float(amount) > 0:
+                        rows.append({
+                            "date": date_str, "description": desc,
+                            "amount": amount, "is_credit": True,
+                        })
+                elif w_val and float(w_val) > 0:
                     rows.append({
                         "date": date_str, "description": desc,
                         "amount": w_val, "is_credit": False,
@@ -605,6 +671,35 @@ def parse_ippb_pdf(path: str) -> pd.DataFrame:
                     rows.append({
                         "date": date_str, "description": desc,
                         "amount": d_val, "is_credit": True,
+                    })
+
+    if not rows:
+        DATE_AMOUNT_RE = re.compile(
+            r"(\d{2}-\d{2}-\d{4})"
+            r"(.+?)"
+            r"([\d,]+\.\d{2})"
+            r"(?:\s+([\d,]+\.\d{2}))?"
+        )
+        with pdfplumber.open(path) as pdf:
+            for page in pdf.pages:
+                text = page.extract_text() or ""
+                for line in text.splitlines():
+                    m = DATE_AMOUNT_RE.match(line.strip())
+                    if not m:
+                        continue
+                    date_str = m.group(1)
+                    desc     = m.group(2).strip()
+                    amt      = float(m.group(3).replace(",", ""))
+                    dl = desc.lower()
+                    is_credit = (
+                        "~cr~" in dl
+                        or "~ft~" in dl
+                        or "~rvl~" in dl
+                        or "deposit" in dl
+                    )
+                    rows.append({
+                        "date": date_str, "description": desc,
+                        "amount": str(amt), "is_credit": is_credit,
                     })
 
     df = pd.DataFrame(rows)
@@ -618,9 +713,6 @@ def parse_ippb_pdf(path: str) -> pd.DataFrame:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def parse_canara_bank_pdf(path: str) -> pd.DataFrame:
-    """
-    Parse Canara Bank ePassbook PDF statement (text-extraction approach).
-    """
     DATE_LINE_RE = re.compile(
         r"(\d{2}-\d{2}-\d{4})"
         r"(.*?)"
@@ -671,10 +763,8 @@ def parse_canara_bank_pdf(path: str) -> pd.DataFrame:
                         is_credit = False
 
                     rows.append({
-                        "date": date_str,
-                        "description": full_desc,
-                        "amount": amount,
-                        "is_credit": is_credit,
+                        "date": date_str, "description": full_desc,
+                        "amount": amount, "is_credit": is_credit,
                     })
                 elif line.lower().startswith("chq:"):
                     desc_lines = []
@@ -687,12 +777,12 @@ def parse_canara_bank_pdf(path: str) -> pd.DataFrame:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Generic / fallback PDF parser
+# Generic / fallback PDF parser  (tries both table and text modes)
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _parse_generic_pdf(path: str) -> pd.DataFrame:
-    """Generic fallback PDF parser for HDFC, Axis, and other formats."""
     rows: list[dict] = []
+
     with pdfplumber.open(path) as pdf:
         for page in pdf.pages:
             table = page.extract_table()
@@ -714,9 +804,7 @@ def _parse_generic_pdf(path: str) -> pd.DataFrame:
                 continue
 
             header_row = [
-                str(c or "").strip()
-                for c in table[header_idx]
-                if c is not None
+                str(c or "").strip() for c in table[header_idx] if c is not None
             ]
             col_map: dict[str, int] = {}
             for idx, cell in enumerate(header_row):
@@ -727,9 +815,7 @@ def _parse_generic_pdf(path: str) -> pd.DataFrame:
                     col_map.setdefault("debit", idx)
                 elif any(x in cu for x in ("DEPOSIT", "CREDIT", "CR")):
                     col_map.setdefault("credit", idx)
-                elif any(
-                    x in cu for x in ("PARTICULAR", "DESCRIPTION", "NARRATION")
-                ):
+                elif any(x in cu for x in ("PARTICULAR", "DESCRIPTION", "NARRATION")):
                     col_map.setdefault("desc", idx)
 
             col_map.setdefault("date", 0)
@@ -767,6 +853,34 @@ def _parse_generic_pdf(path: str) -> pd.DataFrame:
                         "amount": d_val, "is_credit": True,
                     })
 
+    if not rows:
+        DATE_AMOUNT_RE = re.compile(
+            r"(\d{2}[/-]\d{2}[/-]\d{4})"
+            r"(.{5,80}?)"
+            r"([\d,]+\.\d{2})"
+            r"\s+([\d,]+\.\d{2})\s*$"
+        )
+        with pdfplumber.open(path) as pdf:
+            for page in pdf.pages:
+                text = page.extract_text() or ""
+                for line in text.splitlines():
+                    m = DATE_AMOUNT_RE.match(line.strip())
+                    if not m:
+                        continue
+                    amount_col = float(m.group(3).replace(",", ""))
+                    desc       = m.group(2).strip()
+                    du         = desc.upper()
+                    is_credit  = (
+                        "CR" in du.split()
+                        or "/CR" in du
+                        or "CREDIT" in du
+                        or "DEPOSIT" in du
+                    )
+                    rows.append({
+                        "date": m.group(1), "description": desc,
+                        "amount": str(amount_col), "is_credit": is_credit,
+                    })
+
     df = pd.DataFrame(rows)
     if df.empty:
         raise ValueError("Could not extract transactions from this PDF.")
@@ -774,58 +888,79 @@ def _parse_generic_pdf(path: str) -> pd.DataFrame:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# PDF auto-detect router
+# Parser registry
+# ──────────────────────────────────────────────────────────────────────────────
+
+_PARSER_MAP: dict[str, callable] = {
+    "sbi":     parse_sbi_pdf,
+    "ippb":    parse_ippb_pdf,
+    "union":   parse_union_bank_pdf,
+    "canara":  parse_canara_bank_pdf,
+    "generic": _parse_generic_pdf,
+}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# PDF auto-detect router with cascading fallback
 # ──────────────────────────────────────────────────────────────────────────────
 
 def parse_pdf_statement(path: str) -> pd.DataFrame:
-    """
-    Auto-detect PDF bank format and dispatch to the correct parser.
-    Detection order: SBI → Union Bank → IPPB → Canara → generic fallback.
-    """
-    with pdfplumber.open(path) as pdf:
-        text        = pdf.pages[0].extract_text() or ""
-        first_table = pdf.pages[0].extract_table()
+    header, first_table = _extract_pdf_signals(path)
+    tbl_header = _table_header_str(first_table)
 
-    header = text.upper()
+    scores  = _score_banks(header, tbl_header)
+    ordered = _ranked_parsers(scores)
 
-    # SBI detection: header contains "STATE BANK OF INDIA" or IFSC starts with SBIN
-    if "STATE BANK OF INDIA" in header or "SBIN0" in header or "SBIYA" in header:
-        return parse_sbi_pdf(path)
+    print(f"🏦 Bank detection scores: {scores}")
+    print(f"   Trying parsers in order: {ordered}")
 
-    # Union Bank
-    if "UNION BANK" in header or "UBIN" in header:
-        return parse_union_bank_pdf(path)
+    errors: list[str] = []
+    for bank in ordered:
+        parser = _PARSER_MAP[bank]
+        try:
+            df = parser(path)
+            if df is not None and not df.empty:
+                print(f"✅ Successfully parsed with '{bank}' parser ({len(df)} rows)")
+                return df
+            else:
+                errors.append(f"[{bank}] returned empty DataFrame")
+        except Exception as exc:
+            errors.append(f"[{bank}] {type(exc).__name__}: {exc}")
+            print(f"⚠️  '{bank}' parser failed: {exc} — trying next…")
 
-    # IPPB
-    if "INDIA POST" in header or "IPPB" in header or "IPOS" in header:
-        return parse_ippb_pdf(path)
-
-    # Canara Bank
-    if "CANARA" in header or "CNRB" in header:
-        return parse_canara_bank_pdf(path)
-
-    # Check first table header for known patterns
-    if first_table:
-        hj = " ".join(str(c or "") for c in (first_table[0] or [])).upper()
-        if "WITHDRWAL" in hj:
-            return parse_ippb_pdf(path)
-        if "PARTICULARS" in hj and "WITHDRAWAL" in hj:
-            return parse_union_bank_pdf(path)
-        # SBI-style column signature
-        if "VALUE DATE" in hj and "DEBIT" in hj and "CREDIT" in hj:
-            return parse_sbi_pdf(path)
-
-    return _parse_generic_pdf(path)
+    raise ValueError(
+        "All parsers failed. Details:\n" + "\n".join(errors)
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Canara Bank ePassbook CSV parser
+# Canara Bank ePassbook CSV parser  ← FIXED
 # ──────────────────────────────────────────────────────────────────────────────
 
 def parse_canara_csv(path: str) -> pd.DataFrame:
-    """Parse Canara Bank ePassbook CSV export (dual-column layout)."""
+    """
+    Parse Canara Bank ePassbook CSV export.
+
+    Layout detection
+    ----------------
+    The export uses two section layouts across pages:
+
+    Layout 1  (cols):  c0=date, c3=narration, c7=deposit, c9=withdrawal, c10=balance
+    Layout 2  (cols):  c0=date, c1=narration, c2=deposit, c3=withdrawal, c4=balance
+      detected by header row: c0="Date", c1="Particulars"
+
+    In BOTH layouts the narration is spread across multiple rows BEFORE the
+    date row.  After the date row come post-date noise lines (hash/date stamp,
+    time stamp, Chq: reference) that must be skipped.
+    """
     df_raw = pd.read_csv(path, header=None, dtype=str)
     DATE_RE_CANARA = re.compile(r"^\d{2}-\d{2}-\d{4}$")
+
+    # File-level meta rows (bank/customer header block at top of file)
+    META_C0 = re.compile(
+        r"^(customer|name|phone|address|statement|branch|ifsc|jagann|pradesh|3/2)",
+        re.IGNORECASE,
+    )
 
     def _get(row: list, i: int) -> str:
         v = str(row[i]).strip() if i < len(row) else ""
@@ -839,76 +974,97 @@ def parse_canara_csv(path: str) -> pd.DataFrame:
         except ValueError:
             return None
 
-    transactions: list[dict] = []
-    layout = 1
-    cur_date: str | None   = None
-    cur_parts: list[str]   = []
-    cur_dep: float | None  = None
-    cur_with: float | None = None
-    cur_bal: float | None  = None
+    def _is_noise(s: str) -> bool:
+        """Return True if a narration token is post-date noise, not real narration."""
+        if not s:
+            return True
+        # Chq: reference lines
+        if re.match(r"^chq:", s, re.IGNORECASE):
+            return True
+        # Page markers
+        if re.match(r"^page\s+\d+", s, re.IGNORECASE):
+            return True
+        # Column header words
+        if re.match(
+            r"^(date|particulars|deposits|withdrawals|balance|opening balance|closing balance)$",
+            s, re.IGNORECASE,
+        ):
+            return True
+        # Pure time stamp HH:MM:SS
+        if re.match(r"^\d{2}:\d{2}:\d{2}$", s):
+            return True
+        # Hash/date continuation line: hex chars followed by /dd/mm/yyyy
+        if re.match(r"^[0-9A-Fa-f]{6,}/\d{2}/\d{2}/\d{4}", s):
+            return True
+        # Lines starting with // (hash reference continuations)
+        if s.startswith("//"):
+            return True
+        return False
 
-    def flush() -> None:
-        nonlocal cur_date, cur_parts, cur_dep, cur_with, cur_bal
-        if cur_date:
-            transactions.append({
-                "date": cur_date,
-                "description": " ".join(p for p in cur_parts if p),
-                "deposit": cur_dep,
-                "withdrawal": cur_with,
-                "balance": cur_bal,
-            })
-        cur_date = None
-        cur_parts = []
-        cur_dep = cur_with = cur_bal = None
+    transactions: list[dict] = []
+    pending_parts: list[str] = []
+    layout = 1  # default: Layout 1
 
     for _, row_s in df_raw.iterrows():
         row = list(row_s)
         c0 = _get(row, 0)
         c1 = _get(row, 1)
 
+        # ── Layout-switch header detection ──────────────────────────────────
+        # Layout 2 header: c0="Date", c1="Particulars"
         if c0 == "Date" and c1 == "Particulars":
             layout = 2
+            pending_parts = []
             continue
-        if c0 == "" and c1 == "Date":
+        # Layout 1 header: c1="Date", c4="Particulars"
+        if c1 == "Date" and _get(row, 4) == "Particulars":
             layout = 1
-            continue
-        if re.match(r"^page\s+\d+$", c0, re.I):
-            continue
-        if re.match(r"^page\s+\d+$", _get(row, 4), re.I):
+            pending_parts = []
             continue
 
+        # ── Skip file-level meta rows ───────────────────────────────────────
+        if META_C0.match(c0):
+            continue
+
+        # ── Skip page markers in various columns ────────────────────────────
+        if re.match(r"^page\s+\d+$", _get(row, 4), re.IGNORECASE) or \
+           re.match(r"^page\s+\d+$", _get(row, 10), re.IGNORECASE):
+            continue
+
+        # ── Date row: commit accumulated narration as one transaction ───────
         if DATE_RE_CANARA.match(c0):
-            flush()
-            cur_date = c0
             if layout == 1:
-                cur_parts = [_get(row, 3)]
-                cur_dep   = _num(row, 7)
-                cur_with  = _num(row, 8) or _num(row, 9)
-                cur_bal   = _num(row, 10)
-            else:
-                cur_parts = [c1]
-                cur_dep   = _num(row, 2)
-                cur_with  = _num(row, 3)
-                cur_bal   = _num(row, 4)
-        elif cur_date is not None:
-            if layout == 1:
-                p = _get(row, 3)
-                if cur_dep  is None: cur_dep  = _num(row, 7)
-                if cur_with is None: cur_with = _num(row, 8) or _num(row, 9)
-                if cur_bal  is None: cur_bal  = _num(row, 10)
-            else:
-                p = c1
-                if cur_dep  is None: cur_dep  = _num(row, 2)
-                if cur_with is None: cur_with = _num(row, 3)
-                if cur_bal  is None: cur_bal  = _num(row, 4)
-            if p:
-                cur_parts.append(p)
+                dep   = _num(row, 7)
+                with_ = _num(row, 9)
+                bal   = _num(row, 10)
+            else:  # layout 2
+                dep   = _num(row, 2)
+                with_ = _num(row, 3)
+                bal   = _num(row, 4)
 
-    flush()
+            desc = " ".join(p for p in pending_parts if p).strip()
+            pending_parts = []
+
+            # Only record rows that actually carry an amount
+            if dep is not None or with_ is not None:
+                transactions.append({
+                    "date":        c0,
+                    "description": desc,
+                    "deposit":     dep,
+                    "withdrawal":  with_,
+                    "balance":     bal,
+                })
+            continue
+
+        # ── Non-date row: accumulate narration token ────────────────────────
+        narr = _get(row, 3) if layout == 1 else c1
+        if narr and not _is_noise(narr):
+            pending_parts.append(narr)
+
+    if not transactions:
+        raise ValueError("No transactions found in Canara Bank CSV.")
 
     df = pd.DataFrame(transactions)
-    if df.empty:
-        raise ValueError("No transactions found in Canara Bank CSV.")
 
     def _is_credit(row: pd.Series) -> bool:
         d = row["description"].upper()
@@ -916,11 +1072,14 @@ def parse_canara_csv(path: str) -> pd.DataFrame:
             return True
         if "UPI/DR" in d or "NEFT/DR" in d:
             return False
-        return bool(row["deposit"] and not row["withdrawal"])
+        has_dep = pd.notna(row["deposit"]) and row["deposit"] > 0
+        has_wdl = pd.notna(row["withdrawal"]) and row["withdrawal"] > 0
+        return has_dep and not has_wdl
 
     df["is_credit"] = df.apply(_is_credit, axis=1)
     df["amount"] = df.apply(
-        lambda r: r["deposit"] if r["deposit"] else r["withdrawal"], axis=1
+        lambda r: r["deposit"] if pd.notna(r["deposit"]) and r["deposit"] > 0 else r["withdrawal"],
+        axis=1,
     )
     df["amount"] = (
         df["amount"]
@@ -934,12 +1093,18 @@ def parse_canara_csv(path: str) -> pd.DataFrame:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Generic CSV parser  (SBI / HDFC / Axis / ICICI exports)
+# Generic CSV parser
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _parse_generic_csv(path: str) -> pd.DataFrame:
-    df = pd.read_csv(path)
+    df = pd.read_csv(
+        path,
+        engine="python",
+        on_bad_lines="warn"
+    )
+
     df.columns = [c.strip().lower() for c in df.columns]
+
 
     rename: dict[str, str] = {}
     for col in df.columns:
@@ -975,7 +1140,8 @@ def _parse_generic_csv(path: str) -> pd.DataFrame:
             "CR|CREDIT|DEPOSIT", na=False
         )
 
-    df.setdefault("is_credit", False)
+    if "is_credit" not in df.columns:
+        df["is_credit"] = False
     return df
 
 
@@ -984,12 +1150,6 @@ def _parse_generic_csv(path: str) -> pd.DataFrame:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def answer_question(question: str, df: pd.DataFrame) -> str:
-    """
-    Answer a natural-language question about a parsed transactions DataFrame.
-    Uses the Gemini API (claude-sonnet-4-6 via Anthropic proxy if preferred,
-    or google-generativeai).  Falls back to Groq llama3 if GEMINI_API_KEY
-    is absent.
-    """
     by_cat   = df.groupby("category")["amount"].sum().sort_values(ascending=False)
     by_merch = (
         df.groupby("description")["amount"]
@@ -1028,25 +1188,23 @@ By Month:
         f"Data:\n{context}\n\nQuestion: {question}"
     )
 
-    # Try Gemini first
     gemini_key = os.getenv("GEMINI_API_KEY")
     if gemini_key:
         try:
-            from langchain_google_genai import ChatGoogleGenerativeAI  # noqa: PLC0415
-            from langchain_core.messages import HumanMessage            # noqa: PLC0415
+            from langchain_google_genai import ChatGoogleGenerativeAI
+            from langchain_core.messages import HumanMessage
             llm = ChatGoogleGenerativeAI(
                 model="gemini-2.0-flash-lite",
                 google_api_key=gemini_key,
             )
             return llm.invoke([HumanMessage(content=prompt)]).content
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             print(f"⚠️  Gemini failed: {exc} — falling back to Groq")
 
-    # Fallback: Groq
     groq_key = os.getenv("GROQ_API_KEY")
     if groq_key:
         try:
-            import requests  # noqa: PLC0415
+            import requests
             resp = requests.post(
                 "https://api.groq.com/openai/v1/chat/completions",
                 headers={
@@ -1061,8 +1219,15 @@ By Month:
                 },
                 timeout=15,
             )
-            return resp.json()["choices"][0]["message"]["content"]
-        except Exception as exc:  # noqa: BLE001
+            resp_json = resp.json()
+            if "error" in resp_json:
+                err_msg = resp_json["error"].get("message", str(resp_json["error"]))
+                print(f"⚠️  Groq API error: {err_msg}")
+            elif "choices" in resp_json and resp_json["choices"]:
+                return resp_json["choices"][0]["message"]["content"]
+            else:
+                print(f"⚠️  Groq unexpected response: {resp_json}")
+        except Exception as exc:
             print(f"⚠️  Groq also failed: {exc}")
 
     return "⚠️  No LLM API key found. Set GEMINI_API_KEY or GROQ_API_KEY."
@@ -1093,7 +1258,6 @@ def parse_statement(path: str) -> pd.DataFrame:
     """
     p = path.lower()
 
-    # ── Parse raw rows ───────────────────────────────────────────────────────
     if p.endswith(".pdf"):
         df = parse_pdf_statement(path)
 
@@ -1112,7 +1276,6 @@ def parse_statement(path: str) -> pd.DataFrame:
     else:
         raise ValueError(f"Unsupported file format: {path}")
 
-    # ── Common post-processing ───────────────────────────────────────────────
     df["category"] = df.apply(
         lambda r: categorize(r["description"], r.get("is_credit", False)),
         axis=1,
@@ -1144,7 +1307,7 @@ def parse_statement(path: str) -> pd.DataFrame:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Quick sanity test (run directly: python bank_statement_parser.py <path>)
+# Quick sanity test
 # ──────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":

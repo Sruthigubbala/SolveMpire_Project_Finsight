@@ -18,7 +18,7 @@ def load_and_chunk(docs_folder="backend/rag/documents") -> list:
         
 
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=800, chunk_overlap=150,
+        chunk_size=500, chunk_overlap=100,
         separators=["\n\n", "\n", ".", " "]
     )
     chunks = splitter.split_documents(all_docs)
