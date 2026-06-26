@@ -7,13 +7,12 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
 # Your existing imports below this line
-from backend.agents.orchestrator import run_finsight_pipeline
 import os
 from dotenv import load_dotenv
 
 # 1. Load the environment first before ANY LangChain modules try to read it
 load_dotenv()
-
+print("API KEY:", os.getenv("GEMINI_API_KEY"))
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage  # Fixed legacy import!
 
