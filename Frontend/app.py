@@ -1,9 +1,11 @@
-# frontend/app.py
+# Frontend/app.py
 import sys, os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import streamlit as st
-from Frontend.components.styles import inject_styles
+# ✅ Fixed import — was "from Frontend.components.styles" which crashes
+#    because when running from project root, Frontend/ is already the cwd context
+from components.styles import inject_styles
 
 st.set_page_config(
     page_title="FinSight — Personal Finance Coach",
@@ -12,7 +14,7 @@ st.set_page_config(
 )
 inject_styles()
 
-st.markdown('<div class="hero-title">Your bank statement knows more<br>about you than you think.</div>',
+st.markdown('<div class="hero-title">Your Bank-Statement Knows More<br>About You Than You Think.</div>',
             unsafe_allow_html=True)
 st.markdown('<div class="hero-sub">Upload your statement. Get a personal finance diagnosis in seconds.<br>'
             'Not generic tips — advice built from your actual transactions.</div>',
