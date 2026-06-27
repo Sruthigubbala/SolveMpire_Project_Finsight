@@ -1,21 +1,45 @@
-import plotly.graph_objects as go
+import pandas as pd
+import plotly.express as px
 import streamlit as st
+def spending_bar_chart(category_data):
+    """
+    Displays a donut chart for spending by category.
+    """
+    # Convert dictionary to DataFrame
+    df = pd.DataFrame({
+        "Category": list(category_data.keys()),
+        "Amount": list(category_data.values())
+    })
 
-def spending_bar_chart(by_category: dict):
-    cats = list(by_category.keys())
-    vals = list(by_category.values())
-    fig = go.Figure(go.Bar(
-        x=vals, y=[c.title() for c in cats],
-        orientation="h",
-        marker_color="#1E5EFF",
-        marker_line_width=0
-    ))
-    fig.update_layout(
-        plot_bgcolor="white", paper_bgcolor="white",
-        xaxis_title="Amount (₹)", yaxis_title="",
-        margin=dict(l=10, r=10, t=10, b=10), height=300,
-        font=dict(family="DM Sans")
+    fig = px.pie(
+        df,
+        names="Category",
+        values="Amount",
+        hole=0.60,
+        color="Category",
+        color_discrete_sequence=px.colors.sequential.Blues_r
     )
+
+    fig.update_traces(
+        textposition="inside",
+        textinfo="percent+label",
+        hovertemplate="<b>%{label}</b><br>₹%{value:,.0f}<extra></extra>"
+    )
+
+    fig.update_layout(
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        showlegend=True,
+        legend_title="Category",
+        margin=dict(l=20, r=20, t=30, b=20),
+        font=dict(
+            family="Inter",
+            size=14,
+            color="#1E293B"
+        ),
+        height=450
+    )
+
     st.plotly_chart(fig, use_container_width=True)
 
 def health_score_display(health: dict):

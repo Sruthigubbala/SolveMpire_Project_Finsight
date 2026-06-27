@@ -1,20 +1,42 @@
+# Frontend/pages/4_Schemes.py
+import sys, os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+
 import streamlit as st
-import ast
-import re
+from components.styles import inject_styles
 
-st.set_page_config(page_title="Schemes | FinSight", layout="wide")
+st.set_page_config(page_title="Schemes | FinSight", page_icon="🏦", layout="wide")
+inject_styles()
 
-# ── Guard ─────────────────────────────────────────────────────────────────────
+# ── Guard ─────────────────────────────────────────────────────
 if "result" not in st.session_state:
-    st.warning("No analysis found. Please run the demo analysis first.")
-    if st.button("Go to Upload"):
+    st.markdown('<div class="warning-box"><strong>No analysis found.</strong> Please upload a statement first.</div>',
+                unsafe_allow_html=True)
+    st.write("")
+    if st.button("← Go to Upload", type="primary"):
         st.switch_page("pages/1_Upload.py")
     st.stop()
 
-result = st.session_state["result"]
+result   = st.session_state["result"]
+patterns = result["patterns"]
+schemes_text = result.get("schemes", "")
 
-st.title("Savings Schemes You Qualify For")
-st.caption("Matched based on your income level and spending pattern")
+# ── Header ────────────────────────────────────────────────────
+st.markdown('<div class="section-header"><h1>Savings Schemes for You</h1></div>', unsafe_allow_html=True)
+st.caption("Matched to your income profile and spending patterns by the AI agent")
+
+st.write("")
+
+# ── Profile snapshot ──────────────────────────────────────────
+total_spent = patterns["total_spent"]
+invest_budget = total_spent * 0.15
+
+p1, p2, p3 = st.columns(3)
+with p1: st.metric("Monthly Spend",        f"₹{total_spent:,.0f}")
+with p2: st.metric("Investment Budget",    f"₹{invest_budget:,.0f}", delta="~15% of spend")
+with p3: st.metric("Subscription Savings", f"₹{patterns['subscription_total']:,.0f}", delta="potential to redirect")
+
+st.divider()
 
 # ── AI Recommendation ─────────────────────────────────────────────────────────
 st.subheader("🤖 AI Recommendation")
@@ -69,74 +91,124 @@ with st.container(border=True):
 
 st.divider()
 
-# ── Scheme Cards ──────────────────────────────────────────────────────────────
-st.subheader("Explore All Schemes")
+# ── Static scheme reference cards ─────────────────────────────
+st.markdown('<div class="section-header"><h2>Popular Indian Savings Schemes</h2></div>', unsafe_allow_html=True)
+st.caption("Quick reference — eligibility and returns for common instruments")
 
-SCHEMES = [
+schemes_ref = [
     {
-        "name":    "PPF — Public Provident Fund",
-        "icon":    "🏦",
-        "min":     "₹500/year",
-        "returns": "7.1% p.a.",
-        "lock":    "15 years",
-        "tax":     "Exempt (80C)",
-        "best":    "Long-term wealth building — completely tax-free",
-        "link":    "https://www.indiapost.gov.in",
+        "name":        "Public Provident Fund (PPF)",
+        "badge":       "Government",
+        "badge_class": "badge-gov",
+        "return":      "7.1% p.a.",
+        "min":         "₹500/year",
+        "max":         "₹1.5 lakh/year",
+        "lock":        "15 years",
+        "tax":         "EEE — fully tax-free",
+        "good_for":    "Long-term wealth building with guaranteed returns",
+        "icon":        "🏛️",
     },
     {
-        "name":    "ELSS — Equity Linked Savings Scheme (SIP)",
-        "icon":    "📈",
-        "min":     "₹500/month",
-        "returns": "~12% historical",
-        "lock":    "3 years",
-        "tax":     "Deduction (80C)",
-        "best":    "Medium-term growth + tax saving under 80C",
-        "link":    "https://www.amfiindia.com",
+        "name":        "Systematic Investment Plan (SIP)",
+        "badge":       "Mutual Fund",
+        "badge_class": "badge-mf",
+        "return":      "10–14% p.a. (equity, hist.)",
+        "min":         "₹500/month",
+        "max":         "No limit",
+        "lock":        "ELSS: 3 yrs · Others: none",
+        "tax":         "ELSS qualifies u/s 80C",
+        "good_for":    "Wealth creation through rupee-cost averaging",
+        "icon":        "📈",
     },
     {
-        "name":    "RD — Recurring Deposit",
-        "icon":    "🏧",
-        "min":     "₹100/month",
-        "returns": "6.5–7% p.a.",
-        "lock":    "6 months – 10 years",
-        "tax":     "Taxable",
-        "best":    "Safe monthly savings habit — zero risk",
-        "link":    "https://www.sbi.co.in",
+        "name":        "Pradhan Mantri Jan Dhan Yojana (PMJDY)",
+        "badge":       "Government",
+        "badge_class": "badge-gov",
+        "return":      "4% p.a. savings",
+        "min":         "Zero balance",
+        "max":         "No limit",
+        "lock":        "None",
+        "tax":         "Standard savings account tax rules",
+        "good_for":    "Basic banking + ₹2 lakh accident insurance",
+        "icon":        "🏦",
     },
     {
-        "name":    "NPS — National Pension System",
-        "icon":    "👴",
-        "min":     "₹500/month",
-        "returns": "8–10% p.a.",
-        "lock":    "Till retirement",
-        "tax":     "Deduction (80CCD)",
-        "best":    "Retirement planning — extra ₹50K deduction beyond 80C",
-        "link":    "https://www.npstrust.org.in",
+        "name":        "Recurring Deposit (RD)",
+        "badge":       "Bank",
+        "badge_class": "badge-bank",
+        "return":      "5.5–7% p.a.",
+        "min":         "₹100/month",
+        "max":         "No limit",
+        "lock":        "6 months – 10 years",
+        "tax":         "Interest taxable per slab",
+        "good_for":    "Disciplined monthly saving with guaranteed returns",
+        "icon":        "💰",
     },
     {
-        "name":    "PM Jan Dhan Yojana",
-        "icon":    "🪙",
-        "min":     "₹0 (zero balance)",
-        "returns": "4% savings rate",
-        "lock":    "None",
-        "tax":     "N/A",
-        "best":    "First bank account + ₹2 lakh accident insurance free",
-        "link":    "https://pmjdy.gov.in",
+        "name":        "National Pension System (NPS)",
+        "badge":       "Government",
+        "badge_class": "badge-gov",
+        "return":      "8–12% p.a. (market-linked)",
+        "min":         "₹500/contribution",
+        "max":         "No upper limit",
+        "lock":        "Till age 60",
+        "tax":         "Additional ₹50k u/s 80CCD(1B)",
+        "good_for":    "Retirement corpus with extra tax benefit",
+        "icon":        "🌅",
+    },
+    {
+        "name":        "Sukanya Samriddhi Yojana (SSY)",
+        "badge":       "Government",
+        "badge_class": "badge-gov",
+        "return":      "8.2% p.a.",
+        "min":         "₹250/year",
+        "max":         "₹1.5 lakh/year",
+        "lock":        "21 years / girl turns 18",
+        "tax":         "EEE — fully tax-free",
+        "good_for":    "Parents of daughters — girl child savings",
+        "icon":        "👧",
     },
 ]
 
-for s in SCHEMES:
-    with st.container(border=True):  
-        st.markdown(f"### {s['icon']} {s['name']}")
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Minimum",  s["min"])
-        c2.metric("Returns",  s["returns"])
-        c3.metric("Lock-in",  s["lock"])
-        c4.metric("Tax",      s["tax"])
-        st.markdown(f"**💡 Best for:** {s['best']}")
-        st.link_button("Learn More ↗", s["link"])
+col1, col2 = st.columns(2)
+for i, s in enumerate(schemes_ref):
+    with (col1 if i % 2 == 0 else col2):
+        st.markdown(f"""
+        <div class="scheme-card">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+            <span style="font-size:28px">{s['icon']}</span>
+            <div>
+              <div style="font-weight:700;font-size:16px;color:#1E293B">{s['name']}</div>
+              <span class="scheme-badge {s['badge_class']}">{s['badge']}</span>
+            </div>
+          </div>
+          <table style="width:100%;border-collapse:collapse;font-size:13px">
+            <tr><td style="color:#94A3B8;padding:4px 0;width:45%">Expected return</td><td style="font-weight:600;color:#1E293B">{s['return']}</td></tr>
+            <tr><td style="color:#94A3B8;padding:4px 0">Minimum invest.</td><td style="font-weight:600;color:#1E293B">{s['min']}</td></tr>
+            <tr><td style="color:#94A3B8;padding:4px 0">Maximum invest.</td><td style="font-weight:600;color:#1E293B">{s['max']}</td></tr>
+            <tr><td style="color:#94A3B8;padding:4px 0">Lock-in period</td><td style="font-weight:600;color:#1E293B">{s['lock']}</td></tr>
+            <tr><td style="color:#94A3B8;padding:4px 0">Tax benefit</td><td style="font-weight:600;color:#1E293B">{s['tax']}</td></tr>
+          </table>
+          <div style="margin-top:14px;padding:10px 14px;background:#F8FAFC;border-radius:8px;font-size:13px;color:#374151">
+            💡 <em>{s['good_for']}</em>
+          </div>
+        </div>""", unsafe_allow_html=True)
 
-# ── Nav ───────────────────────────────────────────────────────────────────────
-st.write("")  
-if st.button("← Back to Dashboard", type="secondary"):
-    st.switch_page("pages/2_Dashboard.py")
+st.divider()
+
+# ── Disclaimer ────────────────────────────────────────────────
+st.markdown("""
+<div class="info-box" style="font-size:13px;color:#64748B">
+  <strong>Disclaimer:</strong> The scheme information above is for educational purposes only.
+  Returns shown are historical or indicative. Please consult a SEBI-registered financial advisor
+  before making investment decisions. Interest rates are subject to government revision.
+</div>""", unsafe_allow_html=True)
+
+st.divider()
+nav1, nav2 = st.columns(2)
+with nav1:
+    if st.button("← Back to Dashboard"):
+        st.switch_page("pages/2_Dashboard.py")
+with nav2:
+    if st.button("💬  Ask More Questions →"):
+        st.switch_page("pages/3_Ask_Questions.py")

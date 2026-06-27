@@ -1,17 +1,22 @@
 # Frontend/pages/2_Dashboard.py
-import sys, os, re
+import sys, os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 import streamlit as st
 from components.charts import spending_bar_chart, health_score_display
 from components.styles import inject_styles
 
-st.set_page_config(page_title="Dashboard | FinSight", layout="wide")
+st.set_page_config(page_title="Dashboard | FinSight", page_icon="📊", layout="wide")
 inject_styles()
 
+# ── Guard ────────────────────────────────────────────────────
 if "result" not in st.session_state:
-    st.warning("No analysis found. Please upload a statement first.")
-    if st.button("Go to Upload"):
+    st.markdown("""
+    <div class="warning-box">
+      <strong>No analysis found.</strong> Please upload a bank statement first to see your dashboard.
+    </div>""", unsafe_allow_html=True)
+    st.write("")
+    if st.button("← Go to Upload", type="primary"):
         st.switch_page("pages/1_Upload.py")
     st.stop()
 
@@ -20,157 +25,185 @@ patterns = result["patterns"]
 health   = result["health_score"]
 savings  = result["savings_opportunities"]
 
-st.title("Your Financial Dashboard")
-st.caption("Analyzed by 5 AI agents using your bank statement")
+# ── Page Header ───────────────────────────────────────────────
+st.markdown('<div class="section-header"><h1>Financial Dashboard</h1></div>', unsafe_allow_html=True)
+st.caption("Analyzed by 5 AI agents · All figures derived from your actual transactions")
 
-# ── Summary Metric Cards ──────────────────────────────────────────────────────
+st.write("")
+
+# ── Score badge ───────────────────────────────────────────────
+score = health["score"]
+score_color = "#00A86B" if score >= 65 else "#F59E0B" if score >= 45 else "#E5281E"
+label = health["label"]
+st.markdown(f"""
+<div style="display:flex;align-items:center;gap:14px;background:#FFFFFF;border:1px solid #E8EDF5;
+            border-radius:14px;padding:16px 22px;margin-bottom:20px;width:fit-content">
+  <div style="font-size:38px;font-weight:900;color:{score_color};font-family:'DM Mono',monospace;line-height:1">{score}</div>
+  <div>
+    <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#94A3B8">Overall Health Score</div>
+    <div style="font-size:18px;font-weight:700;color:#1E293B">{label}</div>
+  </div>
+</div>""", unsafe_allow_html=True)
+
+# ── Metric Cards ──────────────────────────────────────────────
 c1, c2, c3, c4, c5 = st.columns(5)
+total_savings_potential = sum(o["saving"] for o in savings)
 metrics = [
-    ("Total Spent",       f"₹{patterns['total_spent']:,.0f}",        ""),
-    ("Top Category",      patterns['top_category'].replace("_", " ").title(), ""),
-    ("Health Score",      f"{health['score']}/100",                   health['label']),
-    ("Savings Potential", f"₹{sum(o['saving'] for o in savings):,.0f}", "this month"),
-    ("Subscriptions",     f"₹{patterns['subscription_total']:,.0f}",  "/month"),
+    ("Total Spent",        f"₹{patterns['total_spent']:,.0f}",         ""),
+    ("Top Category",       patterns['top_category'].replace("_"," ").title(), ""),
+    ("Savings Potential",  f"₹{total_savings_potential:,.0f}",          "this month"),
+    ("Weekend Spend",      f"₹{patterns['weekend_spend']:,.0f}",        ""),
+    ("Subscriptions",      f"₹{patterns['subscription_total']:,.0f}",   "/month"),
 ]
-for col, (label, value, sub) in zip([c1, c2, c3, c4, c5], metrics):
+for col, (label_t, value, sub) in zip([c1, c2, c3, c4, c5], metrics):
     with col:
-        st.metric(label=label, value=value,
-                  delta=sub if sub else None, delta_color="off")
+        st.metric(label=label_t, value=value, delta=sub if sub else None, delta_color="off")
 
 st.divider()
 
-# ── Spending Chart + Health Score ─────────────────────────────────────────────
+# ── Charts row ────────────────────────────────────────────────
 col_left, col_right = st.columns([3, 2])
 with col_left:
-    st.subheader("Spending by Category")
+    st.markdown('<div class="section-header"><h2>Spending by Category</h2></div>', unsafe_allow_html=True)
     spending_bar_chart(patterns["by_category"])
 with col_right:
-    st.subheader("Budget Health Score")
+    st.markdown('<div class="section-header"><h2>Budget Health</h2></div>', unsafe_allow_html=True)
     health_score_display(health)
 
 st.divider()
 
-# ── Savings Opportunities ─────────────────────────────────────────────────────
-st.subheader("Savings Opportunities")
-st.caption("Specific amounts you could save based on your actual transactions")
+# ── Savings Opportunities ─────────────────────────────────────
+st.markdown('<div class="section-header"><h2>Savings Opportunities</h2></div>', unsafe_allow_html=True)
+st.caption("Specific amounts you could recover based on your actual spending patterns")
 
 if savings:
     for opp in savings:
-        with st.container():
-            col_a, col_b = st.columns([3, 1])
-            with col_a:
-                st.markdown(f"**{opp['title']}**  —  {opp['detail']}")
-                st.caption(f"💡 {opp['tip']}")
-            with col_b:
-                st.metric("Potential Saving", f"₹{opp['saving']:,.0f}")
-            st.divider()
+        col_a, col_b = st.columns([3, 1])
+        with col_a:
+            st.markdown(f"**{opp['title']}**")
+            st.caption(f"📌 {opp['detail']}")
+            st.markdown(f'<div class="answer-box" style="margin-top:6px;padding:12px 18px;font-size:14px">💡 {opp["tip"]}</div>', unsafe_allow_html=True)
+        with col_b:
+            st.metric("Save up to", f"₹{opp['saving']:,.0f}")
+        st.divider()
 else:
-    st.success("✅ No major savings opportunities flagged — you're managing well!")
+    st.markdown('<div class="answer-box">✅ <strong>No major savings opportunities flagged</strong> — you\'re managing well this period!</div>',
+                unsafe_allow_html=True)
+
+# ── Behavioral Patterns ───────────────────────────────────────
+st.markdown('<div class="section-header"><h2>Behavioral Patterns</h2></div>', unsafe_allow_html=True)
+p1, p2, p3, p4 = st.columns(4)
+with p1: st.metric("Weekend Spend",         f"₹{patterns['weekend_spend']:,.0f}")
+with p2: st.metric("Transactions",           patterns['transaction_count'])
+with p3: st.metric("Active Subscriptions",   len(patterns['subscription_detail']))
+with p4: st.metric("Categories Tracked",     len(patterns['by_category']))
 
 st.divider()
 
-# ── Behavioral Patterns ───────────────────────────────────────────────────────
-st.subheader("Behavioral Patterns")
-col_p1, col_p2, col_p3 = st.columns(3)
-with col_p1:
-    st.metric("Weekend Spend", f"₹{patterns['weekend_spend']:,.0f}")
-with col_p2:
-    st.metric("Transactions", patterns['transaction_count'])
-with col_p3:
-    st.metric("Active Subscriptions", len(patterns['subscription_detail']))
+# ── Action Plan ───────────────────────────────────────────────
+# ── Action Plan ───────────────────────────────────────────────
+st.markdown(
+    '<div class="section-header"><h1>Your Personalized Action Plan</h1></div>',
+    unsafe_allow_html=True,
+)
+st.caption("Generated by the AI advice agent using your actual transaction data")
 
-st.divider()
-
-# ── Action Plan ───────────────────────────────────────────────────────────────
-st.subheader("Your Personalized Action Plan")
 
 def extract_advice_text(advice) -> str:
-    """Safely extract plain text from whatever the LLM returns."""
     if isinstance(advice, str):
         return advice
+
     if hasattr(advice, "content"):
-        content = advice.content
-        if isinstance(content, str):
-            return content
-        if isinstance(content, list):
+        c = advice.content
+        if isinstance(c, str):
+            return c
+        if isinstance(c, list):
             return "\n\n".join(
-                part.get("text", "") if isinstance(part, dict)
-                else (part.text if hasattr(part, "text") else str(part))
-                for part in content
+                p.get("text", "") if isinstance(p, dict)
+                else (p.text if hasattr(p, "text") else str(p))
+                for p in c
             )
+
     if isinstance(advice, list):
         return "\n\n".join(
-            part.get("text", "") if isinstance(part, dict)
-            else (part.text if hasattr(part, "text") else str(part))
-            for part in advice
+            p.get("text", "") if isinstance(p, dict)
+            else (p.text if hasattr(p, "text") else str(p))
+            for p in advice
         )
+
     if isinstance(advice, dict):
         return advice.get("text", str(advice))
+
     return str(advice)
 
 
-def format_action_plan(raw_text: str):
-    """
-    Render the action plan as clean line-by-line bullet points.
-    Handles LLM output that may be a wall of text, numbered list, or
-    already bullet-pointed lines.
-    """
-    lines = []
-    for line in raw_text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        lines.append(line)
-
-    # Detect if ANY line already starts with a bullet / number
-    has_structure = any(
-        re.match(r'^(\*|-|•|\d+[.)]\s)', l) for l in lines
-    )
-
-    if has_structure:
-        # Already structured — just render each line individually
-        for line in lines:
-            # Normalise various bullet styles to markdown bullet
-            line = re.sub(r'^(\*|-|•)\s*', '- ', line)         # •, -, * → -
-            line = re.sub(r'^\d+[.)]\s*', '- ', line)           # 1. / 1) → -
-            st.markdown(line)
-    else:
-        # Wall of text — split on sentence boundaries and render as bullets
-        # Split on ". " but keep the period
-        sentences = re.split(r'(?<=[.!?])\s+', raw_text.strip())
-        for sentence in sentences:
-            sentence = sentence.strip()
-            if sentence:
-                st.markdown(f"- {sentence}")
-
-
 advice_text = extract_advice_text(result["advice"])
-format_action_plan(advice_text)
+
+# Beautiful advice card
+st.markdown(
+    """
+    <style>
+    .advice-card{
+        background:#FFFFFF;
+        border:1px solid #E5E7EB;
+        border-left:6px solid #87CEEB;
+        border-radius:18px;
+        padding:22px;
+        box-shadow:0 8px 24px rgba(0,0,0,.06);
+        margin-bottom:20px;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+with st.container(border=True):
+
+    for block in advice_text.split("\n\n"):
+
+        block = block.strip()
+
+        if not block:
+            continue
+
+        st.markdown(block)
+
+        st.write("")
 
 st.divider()
 
-# ── Subscription Audit ────────────────────────────────────────────────────────
-st.subheader("Subscription Audit")
+# ── Subscription Audit ────────────────────────────────────────
+st.markdown('<div class="section-header"><h2>Subscription Audit</h2></div>', unsafe_allow_html=True)
 if patterns["subscription_detail"]:
-    sub_data = [{"Merchant": k, "Amount (₹)": f"₹{v:,.0f}", "Frequency": "Monthly"}
-                for k, v in patterns["subscription_detail"].items()]
+    sub_data = [
+        {"Merchant": k, "Monthly Cost": f"₹{v:,.0f}", "Annual Cost": f"₹{v*12:,.0f}", "Status": "Active"}
+        for k, v in patterns["subscription_detail"].items()
+    ]
     st.dataframe(sub_data, hide_index=True, use_container_width=True)
+    total_subs = patterns['subscription_total']
+    st.caption(f"Total subscription spend: ₹{total_subs:,.0f}/month · ₹{total_subs*12:,.0f}/year")
 else:
-    st.caption("No recurring subscriptions detected.")
+    st.markdown('<div class="info-box">No recurring subscriptions detected in this statement.</div>',
+                unsafe_allow_html=True)
 
-# ── All Transactions ──────────────────────────────────────────────────────────
-with st.expander("View All Transactions"):
+# ── Transactions ──────────────────────────────────────────────
+with st.expander("📋  View All Transactions"):
     df = result["df"]
-    # Show available columns gracefully
-    show_cols = [c for c in ["date", "description", "amount", "category", "type", "Type"]
-                 if c in df.columns]
-    st.dataframe(df[show_cols], hide_index=True, use_container_width=True)
+    display_cols = [c for c in ["date","description","amount","category"] if c in df.columns]
+    st.dataframe(df[display_cols], hide_index=True, use_container_width=True)
+    st.caption(f"{len(df)} transactions total")
 
 st.divider()
-col_nav1, col_nav2 = st.columns(2)
-with col_nav1:
-    if st.button("Ask Questions About Your Statement →"):
+
+# ── Navigation ────────────────────────────────────────────────
+nav1, nav2, nav3 = st.columns(3)
+with nav1:
+    if st.button("💬  Ask Questions →", use_container_width=True):
         st.switch_page("pages/3_Ask_Questions.py")
-with col_nav2:
-    if st.button("View Savings Schemes →"):
+with nav2:
+    if st.button("🏦  View Schemes →", use_container_width=True):
         st.switch_page("pages/4_Schemes.py")
+with nav3:
+    if st.button("📤  Analyze Another Statement", use_container_width=True):
+        del st.session_state["result"]
+        st.switch_page("pages/1_Upload.py")
