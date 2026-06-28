@@ -33,3 +33,6 @@ google-generativeai
 langchain-huggingface
 langchain
 huggingface-hub
+transformers
+torch
+torchvision
