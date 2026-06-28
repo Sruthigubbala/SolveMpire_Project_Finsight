@@ -30,3 +30,6 @@ SQLAlchemy==2.0.50
 scikit-learn==1.9.0
 
 google-generativeai
+langchain-huggingface
+langchain
+huggingface-hub
