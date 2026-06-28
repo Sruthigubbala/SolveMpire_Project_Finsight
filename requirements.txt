@@ -36,3 +36,4 @@ huggingface-hub
 transformers
 torch
 torchvision
+langchain_community
