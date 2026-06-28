@@ -29,7 +29,7 @@ st.write("")
 col1, col2, col3 = st.columns([1.2, 0.9, 4])
 with col1:
     if st.button ("🚀Analyze My Statement", type="primary", use_container_width=True):
-        st.switch_page("pages/1_Upload.py")
+        st.switch_page("pages/1_upload.py")
 
 st.divider()
 
