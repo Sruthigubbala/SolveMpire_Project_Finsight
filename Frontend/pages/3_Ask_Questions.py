@@ -14,7 +14,7 @@ st.set_page_config(page_title="Ask Questions | FinSight", layout="wide")
 if "result" not in st.session_state:
     st.warning("No analysis found. Please upload a statement first.")
     if st.button("Go to Upload"):
-        st.switch_page("pages/1_Upload.py")
+        st.switch_page("pages/1_upload.py")
     st.stop()
 
 result   = st.session_state["result"]
