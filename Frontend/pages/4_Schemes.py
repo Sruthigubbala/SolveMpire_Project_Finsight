@@ -14,7 +14,7 @@ if "result" not in st.session_state:
                 unsafe_allow_html=True)
     st.write("")
     if st.button("← Go to Upload", type="primary"):
-        st.switch_page("pages/1_Upload.py")
+        st.switch_page("pages/1_upload.py")
     st.stop()
 
 result   = st.session_state["result"]
