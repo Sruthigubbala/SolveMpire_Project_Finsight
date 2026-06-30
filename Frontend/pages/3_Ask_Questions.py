@@ -272,10 +272,10 @@ if send and user_input.strip():
     st.session_state["chat_history"].append({"role": "ai",   "text": ai_reply})
     st.rerun()
 
-# ── Clear chat ─────────────────────────────────────────────────────────────────
-col_clear, col_back = st.columns([1, 5])
+# ── Clear chat / Navigation ─────────────────────────────────────────────────────
+col_clear, col_schemes, col_back = st.columns([1, 1, 1])
 with col_clear:
-    if st.button("🗑 Clear Chat"):
+    if st.button("🗑 Clear Chat", use_container_width=True):
         st.session_state["chat_history"] = []
         chat = model.start_chat(history=[])
         chat.send_message(
@@ -284,6 +284,9 @@ with col_clear:
         )
         st.session_state["gemini_session"] = chat
         st.rerun()
+with col_schemes:
+    if st.button("🏦 Ask Schemes →", type="primary", use_container_width=True):
+        st.switch_page("pages/4_Schemes.py")
 with col_back:
-    if st.button("← Back to Dashboard"):
+    if st.button("← Back to Dashboard", use_container_width=True):
         st.switch_page("pages/2_Dashboard.py")
